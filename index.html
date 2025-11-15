@@ -493,24 +493,98 @@
                 const winMove = this.findWinningMove(1);
                 if (winMove) return winMove;
 
-                // 2. 检查是否需要防守
+                // 2. 检查是否需要防守对手的五连
                 const blockMove = this.findWinningMove(2);
                 if (blockMove) return blockMove;
 
-                // 3. VCF搜索 - 连续冲四
-                if (Date.now() - startTime < maxTime * 0.6) {
-                    const vcfMove = this.searchVCF(1, 10);
+                // 2.5 检查对手是否有双活三、双冲四等必胜棋型
+                const blockCritical = this.findCriticalDefense(2);
+                if (blockCritical) return blockCritical;
+
+                // 3. 检查AI是否能形成双威胁（必胜）
+                const doubleThreat = this.findDoubleThreatMove(1);
+                if (doubleThreat) return doubleThreat;
+
+                // 4. VCF搜索 - 连续冲四（加强版）
+                if (Date.now() - startTime < maxTime * 0.5) {
+                    const vcfMove = this.searchVCF(1, 12);
                     if (vcfMove) return vcfMove;
                 }
 
-                // 4. VCT搜索 - 连续威胁
-                if (Date.now() - startTime < maxTime * 0.8) {
-                    const vctMove = this.searchVCT(1, 6);
+                // 5. VCT搜索 - 连续威胁（加强版）
+                if (Date.now() - startTime < maxTime * 0.7) {
+                    const vctMove = this.searchVCT(1, 8);
                     if (vctMove) return vctMove;
                 }
 
-                // 5. Minimax搜索
+                // 6. Minimax搜索（更深层次）
                 return this.minimaxSearch(maxTime - (Date.now() - startTime));
+            }
+
+            // 查找关键防守点（防止对手双活三、双冲四等）
+            findCriticalDefense(player) {
+                const moves = this.generateMoves();
+
+                for (let move of moves) {
+                    this.board[move.x][move.y] = player;
+                    const patterns = this.analyzePoint(move.x, move.y, player);
+                    this.board[move.x][move.y] = 0;
+
+                    // 如果对手能形成活四，必须防守
+                    if (patterns.four >= 1) {
+                        return move;
+                    }
+
+                    // 如果对手能形成双活三，必须防守
+                    if (patterns.three >= 2) {
+                        return move;
+                    }
+
+                    // 如果对手能形成双冲四，必须防守
+                    if (patterns.blockFour >= 2) {
+                        return move;
+                    }
+
+                    // 冲四+活三也是必胜
+                    if (patterns.blockFour >= 1 && patterns.three >= 1) {
+                        return move;
+                    }
+                }
+
+                return null;
+            }
+
+            // 查找能形成双威胁的走法
+            findDoubleThreatMove(player) {
+                const moves = this.generateMoves();
+
+                for (let move of moves) {
+                    this.board[move.x][move.y] = player;
+                    const patterns = this.analyzePoint(move.x, move.y, player);
+                    this.board[move.x][move.y] = 0;
+
+                    // 活四直接赢
+                    if (patterns.four >= 1) {
+                        return move;
+                    }
+
+                    // 双活三是必胜
+                    if (patterns.three >= 2) {
+                        return move;
+                    }
+
+                    // 双冲四也是必胜
+                    if (patterns.blockFour >= 2) {
+                        return move;
+                    }
+
+                    // 冲四+活三
+                    if (patterns.blockFour >= 1 && patterns.three >= 1) {
+                        return move;
+                    }
+                }
+
+                return null;
             }
 
             // 查找获胜移动
@@ -699,7 +773,7 @@
                 return {};
             }
 
-            // Minimax搜索
+            // Minimax搜索（增强版）
             minimaxSearch(timeLimit) {
                 const startTime = Date.now();
                 const moves = this.generateMoves();
@@ -709,29 +783,45 @@
                 let bestMove = moves[0];
                 let bestScore = -Infinity;
 
-                // 为每个移动评分
-                for (let move of moves) {
-                    if (Date.now() - startTime > timeLimit) break;
+                // 迭代加深搜索：从浅到深逐步搜索
+                let currentDepth = 3;
+                const maxDepth = 5;
 
-                    this.board[move.x][move.y] = 1;
-                    const score = this.minimax(3, -Infinity, Infinity, false, startTime, timeLimit);
-                    this.board[move.x][move.y] = 0;
+                while (currentDepth <= maxDepth && Date.now() - startTime < timeLimit * 0.8) {
+                    let tempBestMove = bestMove;
+                    let tempBestScore = -Infinity;
 
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestMove = move;
+                    // 为每个移动评分
+                    for (let move of moves.slice(0, 15)) { // 考虑前15个候选点
+                        if (Date.now() - startTime > timeLimit * 0.9) break;
+
+                        this.board[move.x][move.y] = 1;
+                        const score = this.minimax(currentDepth, -Infinity, Infinity, false, startTime, timeLimit);
+                        this.board[move.x][move.y] = 0;
+
+                        if (score > tempBestScore) {
+                            tempBestScore = score;
+                            tempBestMove = move;
+                        }
                     }
+
+                    if (Date.now() - startTime < timeLimit * 0.9) {
+                        bestMove = tempBestMove;
+                        bestScore = tempBestScore;
+                    }
+
+                    currentDepth++;
                 }
 
                 return bestMove;
             }
 
             minimax(depth, alpha, beta, isMaximizing, startTime, timeLimit) {
-                if (depth === 0 || Date.now() - startTime > timeLimit) {
+                if (depth === 0 || Date.now() - startTime > timeLimit * 0.95) {
                     return this.evaluatePosition(1);
                 }
 
-                const moves = this.generateMoves().slice(0, 10); // 只考虑前10个候选点
+                const moves = this.generateMoves().slice(0, 12); // 考虑前12个候选点
 
                 if (isMaximizing) {
                     let maxScore = -Infinity;
@@ -740,7 +830,7 @@
 
                         if (this.checkWin(move.x, move.y, 1)) {
                             this.board[move.x][move.y] = 0;
-                            return 100000;
+                            return 100000 + depth * 100; // 更早获胜得分更高
                         }
 
                         const score = this.minimax(depth - 1, alpha, beta, false, startTime, timeLimit);
@@ -748,7 +838,7 @@
 
                         maxScore = Math.max(maxScore, score);
                         alpha = Math.max(alpha, score);
-                        if (beta <= alpha) break;
+                        if (beta <= alpha) break; // Alpha-Beta剪枝
                     }
                     return maxScore;
                 } else {
@@ -758,7 +848,7 @@
 
                         if (this.checkWin(move.x, move.y, 2)) {
                             this.board[move.x][move.y] = 0;
-                            return -100000;
+                            return -100000 - depth * 100; // 更早输掉扣分更多
                         }
 
                         const score = this.minimax(depth - 1, alpha, beta, true, startTime, timeLimit);
@@ -766,7 +856,7 @@
 
                         minScore = Math.min(minScore, score);
                         beta = Math.min(beta, score);
-                        if (beta <= alpha) break;
+                        if (beta <= alpha) break; // Alpha-Beta剪枝
                     }
                     return minScore;
                 }
@@ -802,24 +892,43 @@
             evaluateMovePosition(x, y) {
                 let score = 0;
 
+                // 位置权重（中心更有价值）
+                const center = Math.floor(this.boardSize / 2);
+                const distToCenter = Math.abs(x - center) + Math.abs(y - center);
+                score += (15 - distToCenter) * 5; // 中心位置加分
+
                 // 评估AI的得分
                 this.board[x][y] = 1;
                 const aiPatterns = this.analyzePoint(x, y, 1);
                 score += aiPatterns.five * 100000;
-                score += aiPatterns.four * 10000;
-                score += aiPatterns.blockFour * 1000;
-                score += aiPatterns.three * 100;
-                score += aiPatterns.two * 10;
+                score += aiPatterns.four * 50000; // 活四非常重要
+                score += aiPatterns.blockFour * 5000;
+                score += aiPatterns.three * 1000; // 活三很重要
+                score += aiPatterns.blockThree * 100;
+                score += aiPatterns.two * 50;
+
+                // 检测双威胁组合
+                if (aiPatterns.three >= 2) score += 30000; // 双活三
+                if (aiPatterns.blockFour >= 2) score += 25000; // 双冲四
+                if (aiPatterns.blockFour >= 1 && aiPatterns.three >= 1) score += 35000; // 冲四+活三
+
                 this.board[x][y] = 0;
 
-                // 评估防守的得分
+                // 评估防守的得分（防守权重稍低于进攻）
                 this.board[x][y] = 2;
                 const playerPatterns = this.analyzePoint(x, y, 2);
-                score += playerPatterns.five * 50000;
-                score += playerPatterns.four * 8000;
-                score += playerPatterns.blockFour * 800;
-                score += playerPatterns.three * 80;
-                score += playerPatterns.two * 8;
+                score += playerPatterns.five * 90000;
+                score += playerPatterns.four * 45000;
+                score += playerPatterns.blockFour * 4000;
+                score += playerPatterns.three * 900;
+                score += playerPatterns.blockThree * 90;
+                score += playerPatterns.two * 40;
+
+                // 检测对手的双威胁
+                if (playerPatterns.three >= 2) score += 25000;
+                if (playerPatterns.blockFour >= 2) score += 20000;
+                if (playerPatterns.blockFour >= 1 && playerPatterns.three >= 1) score += 30000;
+
                 this.board[x][y] = 0;
 
                 return score;
@@ -829,25 +938,55 @@
                 let score = 0;
                 const opponent = 3 - player;
 
+                // 统计整体棋型
+                let aiLiveFour = 0, aiBlockFour = 0, aiLiveThree = 0;
+                let oppLiveFour = 0, oppBlockFour = 0, oppLiveThree = 0;
+
                 for (let i = 0; i < this.boardSize; i++) {
                     for (let j = 0; j < this.boardSize; j++) {
                         if (this.board[i][j] === player) {
                             const patterns = this.analyzePoint(i, j, player);
+
+                            // 位置价值（中心更好）
+                            const center = Math.floor(this.boardSize / 2);
+                            const distToCenter = Math.abs(i - center) + Math.abs(j - center);
+                            score += (15 - distToCenter) * 2;
+
+                            // 棋型得分
                             score += patterns.five * 100000;
-                            score += patterns.four * 10000;
-                            score += patterns.blockFour * 1000;
-                            score += patterns.three * 100;
-                            score += patterns.two * 10;
+                            score += patterns.four * 15000;
+                            score += patterns.blockFour * 1500;
+                            score += patterns.three * 400;
+                            score += patterns.blockThree * 100;
+                            score += patterns.two * 20;
+
+                            aiLiveFour += patterns.four;
+                            aiBlockFour += patterns.blockFour;
+                            aiLiveThree += patterns.three;
+
                         } else if (this.board[i][j] === opponent) {
                             const patterns = this.analyzePoint(i, j, opponent);
+
+                            // 对手棋型扣分（防守权重）
                             score -= patterns.five * 100000;
-                            score -= patterns.four * 10000;
-                            score -= patterns.blockFour * 1000;
-                            score -= patterns.three * 100;
-                            score -= patterns.two * 10;
+                            score -= patterns.four * 14000;
+                            score -= patterns.blockFour * 1400;
+                            score -= patterns.three * 380;
+                            score -= patterns.blockThree * 95;
+                            score -= patterns.two * 18;
+
+                            oppLiveFour += patterns.four;
+                            oppBlockFour += patterns.blockFour;
+                            oppLiveThree += patterns.three;
                         }
                     }
                 }
+
+                // 组合棋型加成
+                if (aiLiveThree >= 2) score += 8000; // 双活三
+                if (aiBlockFour >= 2) score += 6000; // 双冲四
+                if (oppLiveThree >= 2) score -= 7000; // 对手双活三
+                if (oppBlockFour >= 2) score -= 5500; // 对手双冲四
 
                 return score;
             }
