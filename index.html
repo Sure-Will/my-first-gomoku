@@ -485,40 +485,110 @@
                 this.aiThinking = false;
             }
 
-            // 查找最佳移动
+            // 查找最佳移动（重写防守优先逻辑）
             async findBestMove(maxTime) {
                 const startTime = Date.now();
 
-                // 1. 首先检查是否有立即获胜的走法
+                // 1. 检查AI是否能立即获胜
                 const winMove = this.findWinningMove(1);
                 if (winMove) return winMove;
 
-                // 2. 检查是否需要防守对手的五连
-                const blockMove = this.findWinningMove(2);
-                if (blockMove) return blockMove;
+                // 2. 【关键】必须防守对手的五连
+                const blockWin = this.findWinningMove(2);
+                if (blockWin) return blockWin;
 
-                // 2.5 检查对手是否有双活三、双冲四等必胜棋型
-                const blockCritical = this.findCriticalDefense(2);
-                if (blockCritical) return blockCritical;
+                // 3. 【关键】必须防守对手的活四（两个四连点）
+                const blockLiveFour = this.findAllThreats(2);
+                const opponentLiveFour = blockLiveFour.filter(m => m.four >= 1);
+                if (opponentLiveFour.length > 0) {
+                    return opponentLiveFour[0]; // 立即堵活四
+                }
 
-                // 3. 检查AI是否能形成双威胁（必胜）
-                const doubleThreat = this.findDoubleThreatMove(1);
-                if (doubleThreat) return doubleThreat;
+                // 4. 【关键】必须防守对手的双冲四
+                const opponentDoubleFour = blockLiveFour.filter(m => m.blockFour >= 2);
+                if (opponentDoubleFour.length > 0) {
+                    return opponentDoubleFour[0];
+                }
 
-                // 4. VCF搜索 - 连续冲四（加强版）
-                if (Date.now() - startTime < maxTime * 0.5) {
-                    const vcfMove = this.searchVCF(1, 12);
+                // 5. 【关键】必须防守对手的冲四
+                const opponentBlockFour = blockLiveFour.filter(m => m.blockFour >= 1);
+                if (opponentBlockFour.length > 0) {
+                    return opponentBlockFour[0];
+                }
+
+                // 6. 【关键】必须防守对手的双活三
+                const opponentDoubleThree = blockLiveFour.filter(m => m.three >= 2);
+                if (opponentDoubleThree.length > 0) {
+                    return opponentDoubleThree[0];
+                }
+
+                // 7. 【关键】必须防守对手的活三
+                const opponentThree = blockLiveFour.filter(m => m.three >= 1);
+                if (opponentThree.length > 0) {
+                    // 如果对手有活三，优先堵
+                    return opponentThree[0];
+                }
+
+                // 8. AI尝试形成自己的威胁
+                const aiThreats = this.findAllThreats(1);
+
+                // 活四
+                const aiLiveFour = aiThreats.filter(m => m.four >= 1);
+                if (aiLiveFour.length > 0) return aiLiveFour[0];
+
+                // 双冲四
+                const aiDoubleFour = aiThreats.filter(m => m.blockFour >= 2);
+                if (aiDoubleFour.length > 0) return aiDoubleFour[0];
+
+                // 冲四+活三
+                const aiFourThree = aiThreats.filter(m => m.blockFour >= 1 && m.three >= 1);
+                if (aiFourThree.length > 0) return aiFourThree[0];
+
+                // 双活三
+                const aiDoubleThree = aiThreats.filter(m => m.three >= 2);
+                if (aiDoubleThree.length > 0) return aiDoubleThree[0];
+
+                // 9. VCF搜索 - 连续冲四
+                if (Date.now() - startTime < maxTime * 0.4) {
+                    const vcfMove = this.searchVCF(1, 10);
                     if (vcfMove) return vcfMove;
                 }
 
-                // 5. VCT搜索 - 连续威胁（加强版）
-                if (Date.now() - startTime < maxTime * 0.7) {
-                    const vctMove = this.searchVCT(1, 8);
-                    if (vctMove) return vctMove;
+                // 10. Minimax搜索
+                return this.minimaxSearch(maxTime - (Date.now() - startTime));
+            }
+
+            // 查找所有威胁点（新增）
+            findAllThreats(player) {
+                const threats = [];
+                const moves = this.generateMoves();
+
+                for (let move of moves) {
+                    this.board[move.x][move.y] = player;
+                    const patterns = this.analyzePoint(move.x, move.y, player);
+                    this.board[move.x][move.y] = 0;
+
+                    if (patterns.five || patterns.four || patterns.blockFour || patterns.three) {
+                        threats.push({
+                            x: move.x,
+                            y: move.y,
+                            five: patterns.five ? 1 : 0,
+                            four: patterns.four || 0,
+                            blockFour: patterns.blockFour || 0,
+                            three: patterns.three || 0,
+                            score: move.score
+                        });
+                    }
                 }
 
-                // 6. Minimax搜索（更深层次）
-                return this.minimaxSearch(maxTime - (Date.now() - startTime));
+                // 按威胁等级排序
+                threats.sort((a, b) => {
+                    const scoreA = a.five * 1000000 + a.four * 100000 + a.blockFour * 10000 + a.three * 1000;
+                    const scoreB = b.five * 1000000 + b.four * 100000 + b.blockFour * 10000 + b.three * 1000;
+                    return scoreB - scoreA;
+                });
+
+                return threats;
             }
 
             // 查找关键防守点（防止对手双活三、双冲四等）
@@ -735,39 +805,105 @@
                 return line;
             }
 
-            // 分析棋型
+            // 分析棋型（完全重写）
             analyzePattern(line) {
-                const player = line[Math.floor(line.length / 2)];
+                const center = Math.floor(line.length / 2);
+                const player = line[center];
                 if (player === 0) return {};
 
-                let count = 0;
-                let block = 0;
-                let empty = 0;
+                // 向两边扩展，统计连续的棋子
+                let count = 1; // 中心点
+                let leftEmpty = 0;
+                let rightEmpty = 0;
+                let leftBlock = false;
+                let rightBlock = false;
 
-                for (let i = 0; i < line.length; i++) {
+                // 向左扩展
+                let i = center - 1;
+                while (i >= 0) {
                     if (line[i] === player) {
                         count++;
+                        i--;
                     } else if (line[i] === 0) {
-                        empty++;
+                        leftEmpty++;
+                        i--;
+                        break; // 遇到第一个空位就停止
                     } else {
+                        leftBlock = true; // 被对手棋子堵住
                         break;
                     }
                 }
+                // 检查左边界
+                if (i < 0) leftBlock = true;
 
-                if (line[0] !== 0 && line[0] !== player) block++;
-                if (line[line.length - 1] !== 0 && line[line.length - 1] !== player) block++;
+                // 向右扩展
+                i = center + 1;
+                while (i < line.length) {
+                    if (line[i] === player) {
+                        count++;
+                        i++;
+                    } else if (line[i] === 0) {
+                        rightEmpty++;
+                        i++;
+                        break;
+                    } else {
+                        rightBlock = true;
+                        break;
+                    }
+                }
+                if (i >= line.length) rightBlock = true;
 
-                if (count >= 5) return { five: true };
+                // 检查跳一格的情况（如 XX_X）
+                let gapCount = count;
+                if (leftEmpty > 0 && !leftBlock && i - 1 < line.length) {
+                    let j = center - count - 1;
+                    if (j >= 0 && line[j] === player) {
+                        gapCount++;
+                    }
+                }
+                if (rightEmpty > 0 && !rightBlock && i < line.length) {
+                    if (i < line.length && line[i] === player) {
+                        gapCount++;
+                    }
+                }
+
+                const blocked = leftBlock && rightBlock ? 2 : (leftBlock || rightBlock ? 1 : 0);
+
+                // 判断棋型
+                if (count >= 5) {
+                    return { five: true };
+                }
+
                 if (count === 4) {
-                    if (block === 0) return { four: true };
+                    if (blocked === 0) {
+                        return { four: true }; // 活四：_XXXX_
+                    } else if (blocked === 1) {
+                        return { blockFour: true }; // 冲四：#XXXX_ 或 _XXXX#
+                    }
+                }
+
+                if (count === 3) {
+                    if (blocked === 0) {
+                        // 活三：_XXX_
+                        return { three: true };
+                    } else if (blocked === 1) {
+                        // 眠三：#XXX_ 或 _XXX#
+                        return { blockThree: true };
+                    }
+                }
+
+                if (count === 2) {
+                    if (blocked === 0 && (leftEmpty > 0 || rightEmpty > 0)) {
+                        return { two: true };
+                    }
+                }
+
+                // 检查特殊棋型：跳活三（XX_X）
+                if (gapCount === 4 && blocked === 0) {
                     return { blockFour: true };
                 }
-                if (count === 3) {
-                    if (block === 0 && empty >= 2) return { three: true };
-                    return { blockThree: true };
-                }
-                if (count === 2) {
-                    if (block === 0 && empty >= 3) return { two: true };
+                if (gapCount === 3 && blocked === 0) {
+                    return { three: true };
                 }
 
                 return {};
@@ -862,22 +998,68 @@
                 }
             }
 
-            // 生成候选移动
+            // 生成候选移动（优化版：只考虑临近位置）
             generateMoves() {
-                const moves = [];
                 const scored = [];
+                const visited = new Set();
 
+                // 如果棋盘为空或只有一个子，返回中心附近的位置
+                let totalPieces = 0;
                 for (let i = 0; i < this.boardSize; i++) {
                     for (let j = 0; j < this.boardSize; j++) {
-                        if (this.board[i][j] === 0 && this.hasNeighbor(i, j, 2)) {
-                            const score = this.evaluateMovePosition(i, j);
-                            scored.push({ x: i, y: j, score });
+                        if (this.board[i][j] !== 0) totalPieces++;
+                    }
+                }
+
+                if (totalPieces === 0) {
+                    const center = Math.floor(this.boardSize / 2);
+                    return [{ x: center, y: center, score: 100 }];
+                }
+
+                if (totalPieces === 1) {
+                    const center = Math.floor(this.boardSize / 2);
+                    const moves = [];
+                    for (let dx = -1; dx <= 1; dx++) {
+                        for (let dy = -1; dy <= 1; dy++) {
+                            if (dx === 0 && dy === 0) continue;
+                            const x = center + dx;
+                            const y = center + dy;
+                            if (x >= 0 && x < this.boardSize && y >= 0 && y < this.boardSize && this.board[x][y] === 0) {
+                                moves.push({ x, y, score: 50 });
+                            }
+                        }
+                    }
+                    return moves;
+                }
+
+                // 只考虑已有棋子周围2格内的空位
+                for (let i = 0; i < this.boardSize; i++) {
+                    for (let j = 0; j < this.boardSize; j++) {
+                        if (this.board[i][j] !== 0) {
+                            // 检查周围2格
+                            for (let dx = -2; dx <= 2; dx++) {
+                                for (let dy = -2; dy <= 2; dy++) {
+                                    const x = i + dx;
+                                    const y = j + dy;
+                                    const key = `${x},${y}`;
+
+                                    if (x >= 0 && x < this.boardSize &&
+                                        y >= 0 && y < this.boardSize &&
+                                        this.board[x][y] === 0 &&
+                                        !visited.has(key)) {
+                                        visited.add(key);
+                                        const score = this.evaluateMovePosition(x, y);
+                                        scored.push({ x, y, score });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
+                // 按分数排序，返回前25个最佳候选点
                 scored.sort((a, b) => b.score - a.score);
-                return scored.slice(0, 20); // 返回前20个候选点
+                return scored.slice(0, 25);
             }
 
             hasNeighbor(x, y, distance) {
