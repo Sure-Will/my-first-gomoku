@@ -805,69 +805,40 @@
                 return line;
             }
 
-            // 分析棋型（完全重写）
+            // 分析棋型（修复版）
             analyzePattern(line) {
                 const center = Math.floor(line.length / 2);
                 const player = line[center];
-                if (player === 0) return {};
+                if (player === 0 || player === -1) return {};
 
                 // 向两边扩展，统计连续的棋子
                 let count = 1; // 中心点
-                let leftEmpty = 0;
-                let rightEmpty = 0;
                 let leftBlock = false;
                 let rightBlock = false;
 
                 // 向左扩展
                 let i = center - 1;
-                while (i >= 0) {
-                    if (line[i] === player) {
-                        count++;
-                        i--;
-                    } else if (line[i] === 0) {
-                        leftEmpty++;
-                        i--;
-                        break; // 遇到第一个空位就停止
-                    } else {
-                        leftBlock = true; // 被对手棋子堵住
-                        break;
-                    }
+                while (i >= 0 && line[i] === player) {
+                    count++;
+                    i--;
                 }
-                // 检查左边界
-                if (i < 0) leftBlock = true;
+                // 检查左边是否被堵
+                if (i < 0 || line[i] === -1 || (line[i] !== 0 && line[i] !== player)) {
+                    leftBlock = true;
+                }
 
                 // 向右扩展
-                i = center + 1;
-                while (i < line.length) {
-                    if (line[i] === player) {
-                        count++;
-                        i++;
-                    } else if (line[i] === 0) {
-                        rightEmpty++;
-                        i++;
-                        break;
-                    } else {
-                        rightBlock = true;
-                        break;
-                    }
+                let j = center + 1;
+                while (j < line.length && line[j] === player) {
+                    count++;
+                    j++;
                 }
-                if (i >= line.length) rightBlock = true;
-
-                // 检查跳一格的情况（如 XX_X）
-                let gapCount = count;
-                if (leftEmpty > 0 && !leftBlock && i - 1 < line.length) {
-                    let j = center - count - 1;
-                    if (j >= 0 && line[j] === player) {
-                        gapCount++;
-                    }
-                }
-                if (rightEmpty > 0 && !rightBlock && i < line.length) {
-                    if (i < line.length && line[i] === player) {
-                        gapCount++;
-                    }
+                // 检查右边是否被堵
+                if (j >= line.length || line[j] === -1 || (line[j] !== 0 && line[j] !== player)) {
+                    rightBlock = true;
                 }
 
-                const blocked = leftBlock && rightBlock ? 2 : (leftBlock || rightBlock ? 1 : 0);
+                const blocked = (leftBlock && rightBlock) ? 2 : (leftBlock || rightBlock) ? 1 : 0;
 
                 // 判断棋型
                 if (count >= 5) {
@@ -884,26 +855,16 @@
 
                 if (count === 3) {
                     if (blocked === 0) {
-                        // 活三：_XXX_
-                        return { three: true };
+                        return { three: true }; // 活三：_XXX_
                     } else if (blocked === 1) {
-                        // 眠三：#XXX_ 或 _XXX#
-                        return { blockThree: true };
+                        return { blockThree: true }; // 眠三
                     }
                 }
 
                 if (count === 2) {
-                    if (blocked === 0 && (leftEmpty > 0 || rightEmpty > 0)) {
+                    if (blocked === 0) {
                         return { two: true };
                     }
-                }
-
-                // 检查特殊棋型：跳活三（XX_X）
-                if (gapCount === 4 && blocked === 0) {
-                    return { blockFour: true };
-                }
-                if (gapCount === 3 && blocked === 0) {
-                    return { three: true };
                 }
 
                 return {};
