@@ -453,13 +453,16 @@
                 overlay.style.display = 'flex';
             }
 
-            // AI移动
+            // AI移动（优化版：避免UI阻塞）
             async aiMove() {
                 if (this.gameOver || this.aiThinking) return;
 
                 this.aiThinking = true;
                 this.updateStatus('AI 思考中<span class="thinking"></span>');
                 this.startTimer(1); // AI计时
+
+                // 让UI先更新
+                await new Promise(resolve => setTimeout(resolve, 100));
 
                 const startTime = Date.now();
                 const maxTime = 5000; // 5秒
@@ -469,8 +472,8 @@
 
                     // 确保至少思考一会儿，让玩家看到
                     const elapsed = Date.now() - startTime;
-                    if (elapsed < 500) {
-                        await new Promise(resolve => setTimeout(resolve, 500 - elapsed));
+                    if (elapsed < 300) {
+                        await new Promise(resolve => setTimeout(resolve, 300 - elapsed));
                     }
 
                     if (move) {
@@ -485,7 +488,7 @@
                 this.aiThinking = false;
             }
 
-            // 查找最佳移动（重写防守优先逻辑）
+            // 查找最佳移动（优化版：减少重复计算）
             async findBestMove(maxTime) {
                 const startTime = Date.now();
 
@@ -497,60 +500,56 @@
                 const blockWin = this.findWinningMove(2);
                 if (blockWin) return blockWin;
 
-                // 3. 【关键】必须防守对手的活四（两个四连点）
-                const blockLiveFour = this.findAllThreats(2);
-                const opponentLiveFour = blockLiveFour.filter(m => m.four >= 1);
+                // 【优化】只调用一次 findAllThreats，避免重复计算
+                const opponentThreats = this.findAllThreats(2);
+                const aiThreats = this.findAllThreats(1);
+
+                // 3. 【关键】必须防守对手的活四
+                const opponentLiveFour = opponentThreats.filter(m => m.four >= 1);
                 if (opponentLiveFour.length > 0) {
-                    return opponentLiveFour[0]; // 立即堵活四
+                    return opponentLiveFour[0];
                 }
 
                 // 4. 【关键】必须防守对手的双冲四
-                const opponentDoubleFour = blockLiveFour.filter(m => m.blockFour >= 2);
+                const opponentDoubleFour = opponentThreats.filter(m => m.blockFour >= 2);
                 if (opponentDoubleFour.length > 0) {
                     return opponentDoubleFour[0];
                 }
 
                 // 5. 【关键】必须防守对手的冲四
-                const opponentBlockFour = blockLiveFour.filter(m => m.blockFour >= 1);
+                const opponentBlockFour = opponentThreats.filter(m => m.blockFour >= 1);
                 if (opponentBlockFour.length > 0) {
                     return opponentBlockFour[0];
                 }
 
                 // 6. 【关键】必须防守对手的双活三
-                const opponentDoubleThree = blockLiveFour.filter(m => m.three >= 2);
+                const opponentDoubleThree = opponentThreats.filter(m => m.three >= 2);
                 if (opponentDoubleThree.length > 0) {
                     return opponentDoubleThree[0];
                 }
 
                 // 7. 【关键】必须防守对手的活三
-                const opponentThree = blockLiveFour.filter(m => m.three >= 1);
+                const opponentThree = opponentThreats.filter(m => m.three >= 1);
                 if (opponentThree.length > 0) {
-                    // 如果对手有活三，优先堵
                     return opponentThree[0];
                 }
 
-                // 8. AI尝试形成自己的威胁
-                const aiThreats = this.findAllThreats(1);
-
-                // 活四
+                // 8. AI尝试形成自己的威胁（使用已计算的结果）
                 const aiLiveFour = aiThreats.filter(m => m.four >= 1);
                 if (aiLiveFour.length > 0) return aiLiveFour[0];
 
-                // 双冲四
                 const aiDoubleFour = aiThreats.filter(m => m.blockFour >= 2);
                 if (aiDoubleFour.length > 0) return aiDoubleFour[0];
 
-                // 冲四+活三
                 const aiFourThree = aiThreats.filter(m => m.blockFour >= 1 && m.three >= 1);
                 if (aiFourThree.length > 0) return aiFourThree[0];
 
-                // 双活三
                 const aiDoubleThree = aiThreats.filter(m => m.three >= 2);
                 if (aiDoubleThree.length > 0) return aiDoubleThree[0];
 
-                // 9. VCF搜索 - 连续冲四
-                if (Date.now() - startTime < maxTime * 0.4) {
-                    const vcfMove = this.searchVCF(1, 10);
+                // 9. VCF搜索 - 连续冲四（降低深度减少计算）
+                if (Date.now() - startTime < maxTime * 0.3) {
+                    const vcfMove = this.searchVCF(1, 6);
                     if (vcfMove) return vcfMove;
                 }
 
@@ -870,7 +869,7 @@
                 return {};
             }
 
-            // Minimax搜索（增强版）
+            // Minimax搜索（性能优化版）
             minimaxSearch(timeLimit) {
                 const startTime = Date.now();
                 const moves = this.generateMoves();
@@ -880,54 +879,43 @@
                 let bestMove = moves[0];
                 let bestScore = -Infinity;
 
-                // 迭代加深搜索：从浅到深逐步搜索
-                let currentDepth = 3;
-                const maxDepth = 5;
+                // 减少搜索深度以提升响应速度
+                const depth = 3; // 固定3层深度，更快
 
-                while (currentDepth <= maxDepth && Date.now() - startTime < timeLimit * 0.8) {
-                    let tempBestMove = bestMove;
-                    let tempBestScore = -Infinity;
+                // 只考虑前10个最佳候选点
+                for (let move of moves.slice(0, 10)) {
+                    if (Date.now() - startTime > timeLimit * 0.8) break;
 
-                    // 为每个移动评分
-                    for (let move of moves.slice(0, 15)) { // 考虑前15个候选点
-                        if (Date.now() - startTime > timeLimit * 0.9) break;
+                    this.board[move.x][move.y] = 1;
+                    const score = this.minimax(depth, -Infinity, Infinity, false, startTime, timeLimit);
+                    this.board[move.x][move.y] = 0;
 
-                        this.board[move.x][move.y] = 1;
-                        const score = this.minimax(currentDepth, -Infinity, Infinity, false, startTime, timeLimit);
-                        this.board[move.x][move.y] = 0;
-
-                        if (score > tempBestScore) {
-                            tempBestScore = score;
-                            tempBestMove = move;
-                        }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestMove = move;
                     }
-
-                    if (Date.now() - startTime < timeLimit * 0.9) {
-                        bestMove = tempBestMove;
-                        bestScore = tempBestScore;
-                    }
-
-                    currentDepth++;
                 }
 
                 return bestMove;
             }
 
             minimax(depth, alpha, beta, isMaximizing, startTime, timeLimit) {
-                if (depth === 0 || Date.now() - startTime > timeLimit * 0.95) {
+                if (depth === 0 || Date.now() - startTime > timeLimit * 0.9) {
                     return this.evaluatePosition(1);
                 }
 
-                const moves = this.generateMoves().slice(0, 12); // 考虑前12个候选点
+                const moves = this.generateMoves().slice(0, 8); // 只考虑前8个候选点
 
                 if (isMaximizing) {
                     let maxScore = -Infinity;
                     for (let move of moves) {
+                        if (Date.now() - startTime > timeLimit * 0.9) break;
+
                         this.board[move.x][move.y] = 1;
 
                         if (this.checkWin(move.x, move.y, 1)) {
                             this.board[move.x][move.y] = 0;
-                            return 100000 + depth * 100; // 更早获胜得分更高
+                            return 100000 + depth * 100;
                         }
 
                         const score = this.minimax(depth - 1, alpha, beta, false, startTime, timeLimit);
@@ -935,17 +923,19 @@
 
                         maxScore = Math.max(maxScore, score);
                         alpha = Math.max(alpha, score);
-                        if (beta <= alpha) break; // Alpha-Beta剪枝
+                        if (beta <= alpha) break;
                     }
                     return maxScore;
                 } else {
                     let minScore = Infinity;
                     for (let move of moves) {
+                        if (Date.now() - startTime > timeLimit * 0.9) break;
+
                         this.board[move.x][move.y] = 2;
 
                         if (this.checkWin(move.x, move.y, 2)) {
                             this.board[move.x][move.y] = 0;
-                            return -100000 - depth * 100; // 更早输掉扣分更多
+                            return -100000 - depth * 100;
                         }
 
                         const score = this.minimax(depth - 1, alpha, beta, true, startTime, timeLimit);
@@ -953,18 +943,18 @@
 
                         minScore = Math.min(minScore, score);
                         beta = Math.min(beta, score);
-                        if (beta <= alpha) break; // Alpha-Beta剪枝
+                        if (beta <= alpha) break;
                     }
                     return minScore;
                 }
             }
 
-            // 生成候选移动（优化版：只考虑临近位置）
+            // 生成候选移动（性能优化版：减少候选点）
             generateMoves() {
                 const scored = [];
                 const visited = new Set();
 
-                // 如果棋盘为空或只有一个子，返回中心附近的位置
+                // 如果棋盘为空，返回中心
                 let totalPieces = 0;
                 for (let i = 0; i < this.boardSize; i++) {
                     for (let j = 0; j < this.boardSize; j++) {
@@ -997,7 +987,7 @@
                 for (let i = 0; i < this.boardSize; i++) {
                     for (let j = 0; j < this.boardSize; j++) {
                         if (this.board[i][j] !== 0) {
-                            // 检查周围2格
+                            // 优先搜索紧邻的位置（1格）
                             for (let dx = -2; dx <= 2; dx++) {
                                 for (let dy = -2; dy <= 2; dy++) {
                                     const x = i + dx;
@@ -1018,9 +1008,9 @@
                     }
                 }
 
-                // 按分数排序，返回前25个最佳候选点
+                // 按分数排序，返回前20个候选点（减少数量）
                 scored.sort((a, b) => b.score - a.score);
-                return scored.slice(0, 25);
+                return scored.slice(0, 20);
             }
 
             hasNeighbor(x, y, distance) {
